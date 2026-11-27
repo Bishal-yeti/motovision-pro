@@ -1,0 +1,43 @@
+<resources>
+    <string name="app_name">MotoVision Pro</string>
+    <string name="camera_permission_required">Camera permission is required to acquire photographs and video.</string>
+    <string name="audio_permission_required">Audio recording permission is required for video mode.</string>
+    
+    <!-- Camera Modes -->
+    <string name="mode_photo">PHOTO</string>
+    <string name="mode_night">NIGHT</string>
+    <string name="mode_hdr">HDR</string>
+    <string name="mode_portrait">PORTRAIT</string>
+    <string name="mode_pro">PRO</string>
+    <string name="mode_video">VIDEO</string>
+
+    <!-- Profiles -->
+    <string name="profile_natural">Natural</string>
+    <string name="profile_balanced">Balanced</string>
+    <string name="profile_detailed">Detailed</string>
+    <string name="profile_vibrant">Vibrant</string>
+
+    <!-- Camera Lenses -->
+    <string name="lens_main">1x Main</string>
+    <string name="lens_ultrawide">0.6x Wide</string>
+    <string name="lens_macro">Macro</string>
+    <string name="lens_front">Selfie</string>
+
+    <!-- Pro Controls -->
+    <string name="pro_iso">ISO</string>
+    <string name="pro_shutter">SHUTTER</string>
+    <string name="pro_focus">FOCUS</string>
+    <string name="pro_wb">WB</string>
+    <string name="pro_ev">EV</string>
+    <string name="pro_raw">RAW</string>
+    <string name="pro_peaking">PEAKING</string>
+    <string name="pro_histogram">HISTOGRAM</string>
+
+    <!-- Status Messages -->
+    <string name="capturing">Capturing…</string>
+    <string name="processing">Processing multi-frame…</string>
+    <string name="aligning">Aligning frames…</string>
+    <string name="saved">Image saved to gallery</string>
+    <string name="hold_steady">Hold steady…</string>
+    <string name="compare">Compare Before/After</string>
+</resources>

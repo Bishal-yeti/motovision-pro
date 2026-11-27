@@ -1,0 +1,25 @@
+<resources>
+    <!-- Professional Dark Studio Palette -->
+    <color name="mv_background">#0D0F12</color>
+    <color name="mv_surface">#16191E</color>
+    <color name="mv_surface_variant">#22272E</color>
+    <color name="mv_primary">#FFCC00</color> <!-- Pro Gold Accent -->
+    <color name="mv_primary_variant">#FFAA00</color>
+    <color name="mv_on_primary">#000000</color>
+    
+    <color name="mv_secondary">#4D96FF</color> <!-- Technical Cyan/Blue -->
+    <color name="mv_accent_red">#FF4B4B</color> <!-- Recording Red -->
+    <color name="mv_accent_green">#00E676</color> <!-- In-Focus Green -->
+    
+    <color name="mv_text_primary">#FFFFFF</color>
+    <color name="mv_text_secondary">#A0AAB5</color>
+    <color name="mv_text_tertiary">#606873</color>
+    
+    <color name="mv_scrim">#80000000</color>
+    <color name="mv_shutter_border">#FFFFFF</color>
+    <color name="mv_shutter_fill">#FFFFFF</color>
+    <color name="mv_shutter_processing">#FFCC00</color>
+    
+    <!-- Focus peaking mask color -->
+    <color name="mv_focus_peaking">#8000FF66</color>
+</resources>

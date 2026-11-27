@@ -1,0 +1,20 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base Application Theme -->
+    <style name="Theme.MotoVisionPro" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/mv_primary</item>
+        <item name="colorOnPrimary">@color/mv_on_primary</item>
+        <item name="colorSecondary">@color/mv_secondary</item>
+        <item name="android:windowBackground">@color/mv_background</item>
+        <item name="android:colorBackground">@color/mv_background</item>
+        <item name="colorSurface">@color/mv_surface</item>
+        <item name="colorSurfaceVariant">@color/mv_surface_variant</item>
+    </style>
+
+    <!-- Fullscreen Immersive Camera Theme -->
+    <style name="Theme.MotoVisionPro.Camera" parent="Theme.MotoVisionPro">
+        <item name="android:windowTranslucentStatus">false</item>
+        <item name="android:windowTranslucentNavigation">false</item>
+        <item name="android:statusBarColor">@color/mv_background</item>
+        <item name="android:navigationBarColor">@color/mv_background</item>
+    </style>
+</resources>
