@@ -29,13 +29,13 @@ object DetailSharpnessFilter {
             return output
         }
 
-        // Step 1: Compute fast 3x3 box low-pass approximation of the base luminance layer
-        val baseLum = FloatArray(pixels.size)
-
+        // Single-pass halo-damped unsharp masking:
+        // Computes 3x3 Gaussian low-pass and edge-damping on the fly per pixel.
+        // Completely eliminates the 50MB baseLum FloatArray allocation and thread barrier.
         val threadCount = Runtime.getRuntime().availableProcessors().coerceAtLeast(2)
         val rowsPerChunk = Math.ceil(height.toDouble() / threadCount).toInt()
 
-        val threads1 = Array(threadCount) { threadIdx ->
+        val threads = Array(threadCount) { threadIdx ->
             val startY = threadIdx * rowsPerChunk
             val endY = Math.min(startY + rowsPerChunk, height)
 
@@ -68,39 +68,19 @@ object DetailSharpnessFilter {
                             (p11) * 4f
                         ) / 16.0f
 
-                        baseLum[yCurr + x] = lowPass
-                    }
-                }
-            }
-        }
-        threads1.forEach { it.start() }
-        threads1.forEach { it.join() }
-
-        // Step 2: Extract high-frequency detail and apply halo-damped unsharp masking
-        val threads2 = Array(threadCount) { threadIdx ->
-            val startY = threadIdx * rowsPerChunk
-            val endY = Math.min(startY + rowsPerChunk, height)
-
-            Thread {
-                for (y in startY until endY) {
-                    val rowOffset = y * width
-                    for (x in 0 until width) {
-                        val idx = rowOffset + x
+                        val idx = yCurr + x
                         val origPixel = pixels[idx]
                         val a = (origPixel ushr 24) and 0xFF
                         val r = (origPixel ushr 16) and 0xFF
                         val g = (origPixel ushr 8) and 0xFF
                         val b = origPixel and 0xFF
 
-                        val origLum = (r * 0.299f + g * 0.587f + b * 0.114f) / 255.0f
-                        val lowPass = baseLum[idx]
-
+                        val origLum = p11
                         val rawDetail = origLum - lowPass
 
                         // Non-linear coring and soft-clipping to prevent edge halo overshoot
                         val detailAbs = Math.abs(rawDetail)
                         val dampedDetail = if (detailAbs > haloThreshold) {
-                            // Soft compression for strong edge transitions
                             Math.signum(rawDetail) * (haloThreshold + (detailAbs - haloThreshold) * 0.2f)
                         } else {
                             rawDetail
@@ -121,8 +101,8 @@ object DetailSharpnessFilter {
                 }
             }
         }
-        threads2.forEach { it.start() }
-        threads2.forEach { it.join() }
+        threads.forEach { it.start() }
+        threads.forEach { it.join() }
 
         return output
     }

@@ -26,9 +26,16 @@ object BilateralDenoiseFilter {
         sigmaRange: Float,
         output: IntArray = IntArray(pixels.size)
     ): IntArray {
-        val radius = Math.ceil((sigmaSpatial * 1.5).toDouble()).toInt().coerceIn(1, 4)
+        val radius = Math.ceil((sigmaSpatial * 1.5).toDouble()).toInt().coerceIn(1, 2)
         val twoSigmaSpatialSq = 2.0f * sigmaSpatial * sigmaSpatial
         val twoSigmaRangeSq = 2.0f * sigmaRange * sigmaRange
+
+        // Precompute photometric range weights LUT (256 entries for all 8-bit luminance deltas)
+        // Eliminates hundreds of millions of expensive transcendental exp() calls
+        val rangeLut = FloatArray(256) { diffInt ->
+            val diffNorm = diffInt / 255.0f
+            exp(-(diffNorm * diffNorm) / twoSigmaRangeSq)
+        }
 
         // Precompute spatial weights
         val spatialWeights = FloatArray((2 * radius + 1) * (2 * radius + 1))
@@ -50,15 +57,17 @@ object BilateralDenoiseFilter {
 
             Thread {
                 for (y in startY until endY) {
+                    val rowCenter = y * width
                     for (x in 0 until width) {
-                        val centerIdx = y * width + x
+                        val centerIdx = rowCenter + x
                         val centerPixel = pixels[centerIdx]
                         val centerA = (centerPixel ushr 24) and 0xFF
                         val centerR = (centerPixel ushr 16) and 0xFF
                         val centerG = (centerPixel ushr 8) and 0xFF
                         val centerB = centerPixel and 0xFF
 
-                        val centerLum = (centerR * 0.299f + centerG * 0.587f + centerB * 0.114f) / 255.0f
+                        // Fast integer luminance: (77*R + 150*G + 29*B) >> 8
+                        val centerLumInt = (centerR * 77 + centerG * 150 + centerB * 29) ushr 8
 
                         var weightSum = 0.0f
                         var rSum = 0.0f
@@ -77,10 +86,10 @@ object BilateralDenoiseFilter {
                                 val nR = (neighborPixel ushr 16) and 0xFF
                                 val nG = (neighborPixel ushr 8) and 0xFF
                                 val nB = neighborPixel and 0xFF
-                                val nLum = (nR * 0.299f + nG * 0.587f + nB * 0.114f) / 255.0f
+                                val nLumInt = (nR * 77 + nG * 150 + nB * 29) ushr 8
 
-                                val rangeDiff = nLum - centerLum
-                                val rangeWeight = exp(-(rangeDiff * rangeDiff) / twoSigmaRangeSq)
+                                val diffInt = Math.abs(nLumInt - centerLumInt)
+                                val rangeWeight = rangeLut[diffInt]
                                 val weight = spatialWeights[spatialIdx++] * rangeWeight
 
                                 rSum += nR * weight

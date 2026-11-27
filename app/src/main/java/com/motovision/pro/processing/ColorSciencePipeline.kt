@@ -50,6 +50,18 @@ object ColorSciencePipeline {
                         var linG = ColorLut.sRgbToLinear[g] * gainG
                         var linB = ColorLut.sRgbToLinear[b] * gainB
 
+                        // Dedicated Custom Black/White Filter Path
+                        if (profile.isMonochrome) {
+                            // Panchromatic Spectral Response (emulating fine-art monochrome film):
+                            // 35% Red + 50% Green + 15% Blue provides rich midtone separation,
+                            // smooth skin tones, and dynamic cloud contrast.
+                            val monoLin = (linR * 0.35f + linG * 0.50f + linB * 0.15f).coerceAtLeast(0f)
+                            val toneMono = ColorLut.applySoftKneeToneCurve(monoLin, contrast, rolloff)
+                            val finalMono = ColorLut.linearToSrgb(toneMono)
+                            output[idx] = (a shl 24) or (finalMono shl 16) or (finalMono shl 8) or finalMono
+                            continue
+                        }
+
                         // 2. Compute Luminance and Chrominance in YCbCr
                         val normR = (linR * 255f).coerceIn(0f, 255f)
                         val normG = (linG * 255f).coerceIn(0f, 255f)

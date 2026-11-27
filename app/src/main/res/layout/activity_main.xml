@@ -46,6 +46,19 @@
             android:layout_height="1dp"
             android:layout_weight="1" />
 
+        <!-- Quick B&W Toggle Button -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnQuickBw"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:layout_marginEnd="8dp"
+            android:text="B&amp;W"
+            android:textColor="@color/mv_text_secondary"
+            android:textSize="12sp"
+            app:backgroundTint="@color/mv_surface_variant"
+            app:cornerRadius="18dp" />
+
         <!-- Profile Selection Button -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnProfile"

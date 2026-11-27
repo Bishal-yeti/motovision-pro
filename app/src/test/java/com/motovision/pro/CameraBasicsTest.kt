@@ -46,6 +46,7 @@ class CameraBasicsTest {
         val balanced = ProcessingProfile.BALANCED
         val detailed = ProcessingProfile.DETAILED
         val vibrant = ProcessingProfile.VIBRANT
+        val monochrome = ProcessingProfile.MONOCHROME
 
         assertTrue(natural.sharpnessWeight < balanced.sharpnessWeight)
         assertTrue(balanced.sharpnessWeight < detailed.sharpnessWeight)
@@ -53,6 +54,9 @@ class CameraBasicsTest {
         assertEquals(1.0f, natural.contrastBoost, 0.001f)
         assertEquals(1.0f, natural.saturationScale, 0.001f)
         assertTrue(vibrant.saturationScale > 1.1f)
+        assertTrue(monochrome.isMonochrome)
+        assertEquals(0.0f, monochrome.saturationScale, 0.001f)
+        assertTrue(monochrome.contrastBoost > 1.2f)
     }
 
     @Test

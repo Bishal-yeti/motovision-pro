@@ -11,7 +11,8 @@ enum class ProcessingProfile(
     val noiseReductionStrength: Float,// 0.0 to 1.0 (bilateral filter spatial sigma)
     val contrastBoost: Float,         // 1.0 = linear / natural
     val saturationScale: Float,       // 1.0 = neutral
-    val highlightRolloff: Float       // highlight preservation factor
+    val highlightRolloff: Float,      // highlight preservation factor
+    val isMonochrome: Boolean = false
 ) {
     NATURAL(
         title = "Natural",
@@ -20,7 +21,8 @@ enum class ProcessingProfile(
         noiseReductionStrength = 0.20f,
         contrastBoost = 1.00f,
         saturationScale = 1.00f,
-        highlightRolloff = 0.85f
+        highlightRolloff = 0.85f,
+        isMonochrome = false
     ),
     BALANCED(
         title = "Balanced",
@@ -29,7 +31,8 @@ enum class ProcessingProfile(
         noiseReductionStrength = 0.40f,
         contrastBoost = 1.08f,
         saturationScale = 1.05f,
-        highlightRolloff = 0.70f
+        highlightRolloff = 0.70f,
+        isMonochrome = false
     ),
     DETAILED(
         title = "Detailed",
@@ -38,7 +41,8 @@ enum class ProcessingProfile(
         noiseReductionStrength = 0.25f,
         contrastBoost = 1.05f,
         saturationScale = 1.02f,
-        highlightRolloff = 0.80f
+        highlightRolloff = 0.80f,
+        isMonochrome = false
     ),
     VIBRANT(
         title = "Vibrant",
@@ -47,6 +51,17 @@ enum class ProcessingProfile(
         noiseReductionStrength = 0.35f,
         contrastBoost = 1.15f,
         saturationScale = 1.15f,
-        highlightRolloff = 0.65f
+        highlightRolloff = 0.65f,
+        isMonochrome = false
+    ),
+    MONOCHROME(
+        title = "B&W Pro",
+        description = "Fine-art monochrome with panchromatic film sensitivity, rich tonal gradation, deep shadows, and high micro-contrast.",
+        sharpnessWeight = 0.50f,
+        noiseReductionStrength = 0.25f,
+        contrastBoost = 1.22f,
+        saturationScale = 0.00f,
+        highlightRolloff = 0.75f,
+        isMonochrome = true
     );
 }

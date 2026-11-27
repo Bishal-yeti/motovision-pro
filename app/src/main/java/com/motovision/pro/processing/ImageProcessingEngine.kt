@@ -43,8 +43,8 @@ object ImageProcessingEngine {
             val enhancedBitmap = processBitmap(bitmap, profile, mode, module)
 
             FileOutputStream(outputFile).use { out ->
-                // High-quality JPEG compression (95% to preserve fine micro-textures without compression artifacts)
-                enhancedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                // High-quality JPEG compression (98% to preserve fine micro-textures and subtle B&W gradations)
+                enhancedBitmap.compress(Bitmap.CompressFormat.JPEG, 98, out)
                 out.flush()
             }
 
@@ -55,15 +55,20 @@ object ImageProcessingEngine {
 
             val elapsed = System.currentTimeMillis() - startTime
             Log.i(TAG, "Processed ${profile.title} profile for ${module.displayName} in ${elapsed}ms -> ${outputFile.name}")
-        } catch (e: Exception) {
-            Log.e(TAG, "Image enhancement failed: ${e.message}", e)
-            inputFile.copyTo(outputFile, overwrite = true)
+        } catch (t: Throwable) {
+            Log.e(TAG, "Image enhancement fallback engaged: ${t.message}", t)
+            try {
+                inputFile.copyTo(outputFile, overwrite = true)
+            } catch (copyErr: Throwable) {
+                Log.e(TAG, "Fallback file copy failed: ${copyErr.message}")
+            }
         }
     }
 
     /**
-     * Applies the computational pipeline to an in-memory Bitmap,
-     * applying specialized optical algorithms for Front, Ultrawide, Macro, or Main.
+     * Applies the computational pipeline to an in-memory Bitmap.
+     * Uses a high-efficiency ping-pong buffer pair (bufferA, bufferB) to eliminate
+     * 150MB+ of heap allocations on 12.5 MP captures.
      */
     fun processBitmap(
         source: Bitmap,
@@ -75,63 +80,61 @@ object ImageProcessingEngine {
         val height = source.height
         val pixelCount = width * height
 
-        val pixels = IntArray(pixelCount)
-        source.getPixels(pixels, 0, width, 0, 0, width, height)
+        // Two ping-pong buffers for the entire pipeline
+        var bufSrc = IntArray(pixelCount)
+        var bufDst = IntArray(pixelCount)
+        source.getPixels(bufSrc, 0, width, 0, 0, width, height)
 
         val outputPixels = when (module) {
             CameraModule.ULTRAWIDE -> {
-                // 1. Correct radial barrel distortion
-                val undistorted = UltrawideLensCorrection.correctDistortion(pixels, width, height)
-                // 2. Correct lateral chromatic aberration
+                val undistorted = UltrawideLensCorrection.correctDistortion(bufSrc, width, height)
                 val caCorrected = UltrawideLensCorrection.correctChromaticAberration(undistorted, width, height)
-                // 3. Apply color science and sharpness tuned to 5MP sensor
-                val colorBuffer = IntArray(pixelCount)
-                ColorSciencePipeline.processColors(caCorrected, width, height, profile, colorBuffer)
-                val sharpened = IntArray(pixelCount)
-                DetailSharpnessFilter.enhanceDetails(colorBuffer, width, height, profile.sharpnessWeight * 1.1f, 0.10f, sharpened)
-                sharpened
+                ColorSciencePipeline.processColors(caCorrected, width, height, profile, bufDst)
+                DetailSharpnessFilter.enhanceDetails(bufDst, width, height, profile.sharpnessWeight * 1.1f, 0.10f, bufSrc)
+                bufSrc
             }
             CameraModule.FRONT -> {
                 val blurRadius = if (mode == CaptureMode.PORTRAIT) 8 else 0
-                FrontSelfieEngine.processSelfie(pixels, width, height, profile, portraitBlurRadius = blurRadius)
+                FrontSelfieEngine.processSelfie(bufSrc, width, height, profile, portraitBlurRadius = blurRadius)
             }
             CameraModule.MACRO -> {
-                MacroOptimizationProfile.processMacro(pixels, width, height, profile)
+                MacroOptimizationProfile.processMacro(bufSrc, width, height, profile)
             }
             CameraModule.MAIN_REAR -> {
                 if (mode == CaptureMode.PORTRAIT) {
-                    FrontSelfieEngine.processSelfie(pixels, width, height, profile, portraitBlurRadius = 8)
+                    FrontSelfieEngine.processSelfie(bufSrc, width, height, profile, portraitBlurRadius = 8)
                 } else {
-                    var currentBuffer = pixels
-
                     // 1. Bilateral Denoising (Edge-Preserving Noise Reduction)
                     if (profile.noiseReductionStrength > 0.05f) {
                         val spatial = 1.0f + profile.noiseReductionStrength * 2.0f
                         val range = 0.04f + profile.noiseReductionStrength * 0.06f
-                        val denoisedBuffer = IntArray(pixelCount)
-                        BilateralDenoiseFilter.filter(currentBuffer, width, height, spatial, range, denoisedBuffer)
-                        currentBuffer = denoisedBuffer
+                        BilateralDenoiseFilter.filter(bufSrc, width, height, spatial, range, bufDst)
+                        // Swap buffers
+                        val tmp = bufSrc
+                        bufSrc = bufDst
+                        bufDst = tmp
                     }
 
-                    // 2. Color Science & Tone-Mapping Pipeline
-                    val colorBuffer = IntArray(pixelCount)
-                    ColorSciencePipeline.processColors(currentBuffer, width, height, profile, colorBuffer)
-                    currentBuffer = colorBuffer
+                    // 2. Color Science, Panchromatic B&W & Tone-Mapping Pipeline
+                    ColorSciencePipeline.processColors(bufSrc, width, height, profile, bufDst)
+                    val tmp = bufSrc
+                    bufSrc = bufDst
+                    bufDst = tmp
 
                     // 3. Detail & Sharpness Engine (Halo-Free Non-Linear Unsharp Masking)
                     if (profile.sharpnessWeight > 0.05f) {
-                        val sharpenedBuffer = IntArray(pixelCount)
                         DetailSharpnessFilter.enhanceDetails(
-                            currentBuffer,
+                            bufSrc,
                             width,
                             height,
                             profile.sharpnessWeight,
                             haloThreshold = 0.10f,
-                            sharpenedBuffer
+                            bufDst
                         )
-                        currentBuffer = sharpenedBuffer
+                        bufDst
+                    } else {
+                        bufSrc
                     }
-                    currentBuffer
                 }
             }
         }

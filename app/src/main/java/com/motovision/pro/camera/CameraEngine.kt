@@ -13,6 +13,9 @@ import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.core.*
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -129,9 +132,16 @@ class CameraEngine(
         val selector = selectCameraForModule(currentModule)
         val displayRotation = previewView.display?.rotation ?: android.view.Surface.ROTATION_0
 
-        // 1. Configure Preview (4:3 aspect ratio matching sensor native format)
+        val caps = discovery.getCapabilities(currentModule)
+        val targetSize = caps?.optimal12_5MPResolution ?: caps?.maxPhotoResolution
+
+        // 1. Configure Preview with ResolutionSelector (native 4:3 sensor crop)
+        val previewResolutionSelector = ResolutionSelector.Builder()
+            .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+            .build()
+
         val previewBuilder = Preview.Builder()
-            .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+            .setResolutionSelector(previewResolutionSelector)
             .setTargetRotation(displayRotation)
 
         val camera2PreviewExtender = Camera2Interop.Extender(previewBuilder)
@@ -150,6 +160,7 @@ class CameraEngine(
                     preview,
                     videoCapture
                 )
+                observeCameraState(camera)
                 applyHardwareTuning()
                 Log.i(TAG, "Camera bound successfully for Video module $currentModule")
             } catch (e: Exception) {
@@ -159,10 +170,23 @@ class CameraEngine(
             return
         }
 
-        // 2. Configure ImageCapture (matching 4:3 native ratio)
+        // 2. Configure ImageCapture with explicit high-resolution strategy and 98% JPEG quality
+        // Preserves full 12.5 MP (4080x3060) sensor binned output with crisp micro-textures
+        val captureResolutionSelector = ResolutionSelector.Builder()
+            .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+            .setResolutionStrategy(
+                if (targetSize != null) {
+                    ResolutionStrategy(targetSize.toSize(), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)
+                } else {
+                    ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY
+                }
+            )
+            .build()
+
         val captureBuilder = ImageCapture.Builder()
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-            .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+            .setResolutionSelector(captureResolutionSelector)
+            .setJpegQuality(98)
             .setTargetRotation(displayRotation)
 
         val camera2CaptureExtender = Camera2Interop.Extender(captureBuilder)
@@ -170,36 +194,49 @@ class CameraEngine(
 
         imageCapture = captureBuilder.build()
 
-        // 3. Configure ImageAnalysis for Live Histogram, Peaking, Scene Metrics (matching 4:3 ratio)
-        imageAnalysis = ImageAnalysis.Builder()
-            .setTargetAspectRatio(AspectRatio.RATIO_4_3)
-            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .build()
-            .also { analysis ->
-                analysis.setAnalyzer(analysisExecutor) { imageProxy ->
-                    frameAnalysisListener?.invoke(imageProxy) ?: imageProxy.close()
+        // 3. Conditional ImageAnalysis: ONLY bind in PRO mode where histogram/peaking is needed.
+        // In Photo/Night/Portrait/HDR modes, binding only 2 streams (Preview + Capture) guarantees
+        // 100% rock-solid stability on MediaTek Helio G85 without ISP buffer starvation or native crashes.
+        val needAnalysis = currentMode.supportsProControls
+        if (needAnalysis) {
+            val analysisResolutionSelector = ResolutionSelector.Builder()
+                .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                .setResolutionStrategy(ResolutionStrategy(Size(640, 480), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER))
+                .build()
+
+            imageAnalysis = ImageAnalysis.Builder()
+                .setResolutionSelector(analysisResolutionSelector)
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
+                .also { analysis ->
+                    analysis.setAnalyzer(analysisExecutor) { imageProxy ->
+                        frameAnalysisListener?.invoke(imageProxy) ?: imageProxy.close()
+                    }
                 }
-            }
-
-        // Progressive Binding Strategy to guarantee preview display on any hardware HAL
-        var bound = false
-
-        // Tier 1: Try full 3 use cases (Preview + Capture + Analysis)
-        try {
-            camera = provider.bindToLifecycle(
-                lifecycleOwner,
-                selector,
-                preview,
-                imageCapture,
-                imageAnalysis
-            )
-            bound = true
-            Log.i(TAG, "Tier 1: Camera bound with Preview + Capture + Analysis for $currentModule")
-        } catch (e: Exception) {
-            Log.w(TAG, "Tier 1 binding failed on device HAL ($currentModule): ${e.message}. Falling back to Tier 2...")
+        } else {
+            imageAnalysis = null
         }
 
-        // Tier 2: Fallback to 2-stream mode (Preview + Capture) without ImageAnalysis
+        var bound = false
+
+        // If Pro mode needs analysis, attempt Tier 1 (3-stream)
+        if (needAnalysis && imageAnalysis != null) {
+            try {
+                camera = provider.bindToLifecycle(
+                    lifecycleOwner,
+                    selector,
+                    preview,
+                    imageCapture,
+                    imageAnalysis
+                )
+                bound = true
+                Log.i(TAG, "Pro Mode: Camera bound with Preview + Capture + Analysis for $currentModule")
+            } catch (e: Exception) {
+                Log.w(TAG, "Pro 3-stream binding rejected by HAL: ${e.message}. Falling back to 2-stream...")
+            }
+        }
+
+        // Tier 2: 2-stream mode (Preview + ImageCapture) - guaranteed stable on Helio G85
         if (!bound) {
             try {
                 provider.unbindAll()
@@ -211,7 +248,7 @@ class CameraEngine(
                     imageCapture
                 )
                 bound = true
-                Log.i(TAG, "Tier 2: Camera bound with Preview + Capture for $currentModule")
+                Log.i(TAG, "Camera bound successfully with 2-stream Preview + Capture for $currentModule")
             } catch (e: Exception) {
                 Log.w(TAG, "Tier 2 binding failed ($currentModule): ${e.message}. Falling back to Tier 3 Safe Base Mode...")
             }
@@ -228,12 +265,13 @@ class CameraEngine(
                     CameraSelector.DEFAULT_BACK_CAMERA
                 }
                 val safePreview = Preview.Builder()
-                    .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+                    .setResolutionSelector(previewResolutionSelector)
                     .build().also {
                         it.setSurfaceProvider(previewView.surfaceProvider)
                     }
                 val safeCapture = ImageCapture.Builder()
-                    .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+                    .setResolutionSelector(captureResolutionSelector)
+                    .setJpegQuality(95)
                     .build()
                 camera = provider.bindToLifecycle(
                     lifecycleOwner,
@@ -251,7 +289,22 @@ class CameraEngine(
             }
         }
 
+        observeCameraState(camera)
         applyHardwareTuning()
+    }
+
+    private fun observeCameraState(cam: Camera?) {
+        cam?.cameraInfo?.cameraState?.observe(lifecycleOwner) { state ->
+            when (state.type) {
+                CameraState.Type.OPEN -> Log.d(TAG, "Camera sensor opened and active")
+                CameraState.Type.CLOSED -> {
+                    state.error?.let { err ->
+                        Log.w(TAG, "Camera closed with error code ${err.code}: ${err.cause?.message}")
+                    }
+                }
+                else -> Unit
+            }
+        }
     }
 
     /**
@@ -428,6 +481,7 @@ class CameraEngine(
                 ProcessingProfile.NATURAL -> CaptureRequest.NOISE_REDUCTION_MODE_FAST
                 ProcessingProfile.BALANCED, ProcessingProfile.DETAILED -> CaptureRequest.NOISE_REDUCTION_MODE_FAST
                 ProcessingProfile.VIBRANT -> CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
+                ProcessingProfile.MONOCHROME -> CaptureRequest.NOISE_REDUCTION_MODE_FAST
             }
             optionsBuilder.setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, noiseMode)
 

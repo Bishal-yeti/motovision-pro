@@ -163,4 +163,43 @@ class ImageProcessingEngineTest {
         assertTrue("Skin G must remain natural", outG in 140..185)
         assertTrue("Skin B must remain natural", outB in 110..155)
     }
+
+    @Test
+    fun testMonochromeFilterPanchromaticResponseAndNeutrality() {
+        val width = 16
+        val height = 16
+        val pixels = IntArray(width * height)
+
+        // Fill with mixed colors: pure red, green, blue, skin, foliage, sky
+        val colors = intArrayOf(
+            0xFFFF0000.toInt(), // Red
+            0xFF00FF00.toInt(), // Green
+            0xFF0000FF.toInt(), // Blue
+            0xFFD2A082.toInt(), // Skin tone
+            0xFF2E8B57.toInt(), // Sea green
+            0xFF87CEEB.toInt()  // Sky blue
+        )
+
+        for (i in pixels.indices) {
+            pixels[i] = colors[i % colors.size]
+        }
+
+        val monoOutput = ColorSciencePipeline.processColors(
+            pixels,
+            width,
+            height,
+            ProcessingProfile.MONOCHROME
+        )
+
+        // All output pixels must be strictly neutral grayscale (R == G == B)
+        for (i in monoOutput.indices) {
+            val pixel = monoOutput[i]
+            val r = (pixel ushr 16) and 0xFF
+            val g = (pixel ushr 8) and 0xFF
+            val b = pixel and 0xFF
+            assertEquals("R and G must be identical for monochrome at $i", r, g)
+            assertEquals("G and B must be identical for monochrome at $i", g, b)
+            assertTrue("Pixel luminance must be valid", r in 0..255)
+        }
+    }
 }

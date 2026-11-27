@@ -278,6 +278,13 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // Quick B&W Toggle Button
+        binding.btnQuickBw.setOnClickListener {
+            val isCurrentlyBw = cameraEngine.currentProfile == ProcessingProfile.MONOCHROME
+            val targetProfile = if (isCurrentlyBw) ProcessingProfile.BALANCED else ProcessingProfile.MONOCHROME
+            applyProfileSelection(targetProfile)
+        }
+
         // Enhancement Profile Selector Button
         binding.btnProfile.setOnClickListener { view ->
             showProfilePopupMenu(view)
@@ -386,11 +393,21 @@ class MainActivity : AppCompatActivity() {
         }
         popup.setOnMenuItemClickListener { item ->
             val profile = ProcessingProfile.values()[item.itemId]
-            cameraEngine.setProcessingProfile(profile)
-            binding.btnProfile.text = profile.title
+            applyProfileSelection(profile)
             true
         }
         popup.show()
+    }
+
+    private fun applyProfileSelection(profile: ProcessingProfile) {
+        cameraEngine.setProcessingProfile(profile)
+        binding.btnProfile.text = profile.title
+        val isBw = profile == ProcessingProfile.MONOCHROME
+        val activeColor = ContextCompat.getColor(this, R.color.mv_primary)
+        val defaultColor = ContextCompat.getColor(this, R.color.mv_text_secondary)
+        binding.btnQuickBw.setTextColor(if (isBw) activeColor else defaultColor)
+        val badge = if (isBw) " [B&W ACTIVE]" else ""
+        Toast.makeText(this, "${profile.title} profile active$badge", Toast.LENGTH_SHORT).show()
     }
 
     private fun setupProControlsFromCapabilities() {
