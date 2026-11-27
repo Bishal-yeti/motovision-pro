@@ -65,20 +65,7 @@ class CameraDiscovery(private val cameraManager: CameraManager) {
                 }
             }
 
-            // Map Front camera
-            if (frontCandidates.isNotEmpty()) {
-                // Main front camera is usually the one with highest resolution
-                val bestFront = frontCandidates.maxByOrNull {
-                    val maxRes = it.second.maxPhotoResolution
-                    (maxRes?.width?.toLong() ?: 0L) * (maxRes?.height?.toLong() ?: 0L)
-                }
-                if (bestFront != null) {
-                    moduleToCameraIdMap[CameraModule.FRONT] = bestFront.first
-                    Log.i(TAG, "Mapped FRONT camera to ID ${bestFront.first}")
-                }
-            }
-
-            // Map Rear cameras (Main, Ultrawide, Macro)
+            // Map Rear cameras first (Main, Ultrawide, Macro)
             if (rearCandidates.isNotEmpty()) {
                 // Sort candidates by sensor resolution descending
                 val sortedRear = rearCandidates.sortedByDescending {
@@ -119,6 +106,19 @@ class CameraDiscovery(private val cameraManager: CameraManager) {
                 moduleToCameraIdMap[CameraModule.MAIN_REAR] = cameraIds[0]
             }
 
+            // Map Front camera
+            if (frontCandidates.isNotEmpty()) {
+                // Main front camera is usually the one with highest resolution
+                val bestFront = frontCandidates.maxByOrNull {
+                    val maxRes = it.second.maxPhotoResolution
+                    (maxRes?.width?.toLong() ?: 0L) * (maxRes?.height?.toLong() ?: 0L)
+                }
+                if (bestFront != null) {
+                    moduleToCameraIdMap[CameraModule.FRONT] = bestFront.first
+                    Log.i(TAG, "Mapped FRONT camera to ID ${bestFront.first}")
+                }
+            }
+
         } catch (e: Exception) {
             Log.e(TAG, "Failed to enumerate cameras: ${e.message}", e)
         }
@@ -133,7 +133,6 @@ class CameraDiscovery(private val cameraManager: CameraManager) {
         val capabilities = chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
         val supportsRaw = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)
         val supportsManualSensor = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)
-        val supportsManualPostProcessing = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING)
 
         val isoRange = chars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
         val exposureTimeRange = chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)

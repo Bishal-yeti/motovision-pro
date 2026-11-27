@@ -34,8 +34,15 @@ class FocusPeakingOverlay @JvmOverloads constructor(
         }
 
     fun updatePeakingBitmap(bitmap: Bitmap?) {
-        if (!isPeakingEnabled) return
+        if (!isPeakingEnabled) {
+            bitmap?.recycle()
+            return
+        }
+        val oldBmp = peakingBitmap
         peakingBitmap = bitmap
+        if (oldBmp != null && oldBmp != bitmap && !oldBmp.isRecycled) {
+            oldBmp.recycle()
+        }
         postInvalidate()
     }
 

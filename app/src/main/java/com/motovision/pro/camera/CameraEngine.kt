@@ -68,10 +68,11 @@ class CameraEngine(
 
     // Frame analysis callback for histogram and peaking
     var frameAnalysisListener: ((ImageProxy) -> Unit)? = null
+    var onCameraErrorListener: ((String) -> Unit)? = null
 
     init {
-        val initialModule = discovery.getAllDiscoveredModules().firstOrNull() ?: CameraModule.MAIN_REAR
-        currentModule = initialModule
+        // Always default to the primary rear camera module
+        currentModule = CameraModule.MAIN_REAR
     }
 
     fun startCamera(onReady: (() -> Unit)? = null) {
@@ -83,6 +84,7 @@ class CameraEngine(
                 onReady?.invoke()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to initialize CameraProvider: ${e.message}", e)
+                onCameraErrorListener?.invoke("Camera initialization failed: ${e.localizedMessage}")
             }
         }, ContextCompat.getMainExecutor(context))
     }
@@ -113,7 +115,11 @@ class CameraEngine(
     }
 
     /**
-     * Binds CameraX Preview, ImageCapture, and ImageAnalysis use cases with Camera2 Interop.
+     * Binds CameraX Preview, ImageCapture, and ImageAnalysis use cases with progressive fallback.
+     * Prevents black screen on Helio G85 LIMITED hardware level by trying:
+     * Tier 1: Preview + ImageCapture + ImageAnalysis
+     * Tier 2: Preview + ImageCapture (if 3-stream concurrent allocation fails on device HAL)
+     * Tier 3: Clean Preview + Capture with default camera selector (Safe Base Mode)
      */
     @SuppressLint("UnsafeOptInUsageError")
     fun bindCameraUseCases() {
@@ -121,9 +127,13 @@ class CameraEngine(
         provider.unbindAll()
 
         val selector = selectCameraForModule(currentModule)
+        val displayRotation = previewView.display?.rotation ?: android.view.Surface.ROTATION_0
 
-        // 1. Configure Preview
+        // 1. Configure Preview (4:3 aspect ratio matching sensor native format)
         val previewBuilder = Preview.Builder()
+            .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+            .setTargetRotation(displayRotation)
+
         val camera2PreviewExtender = Camera2Interop.Extender(previewBuilder)
         configureCamera2CaptureSession(camera2PreviewExtender)
 
@@ -144,30 +154,25 @@ class CameraEngine(
                 Log.i(TAG, "Camera bound successfully for Video module $currentModule")
             } catch (e: Exception) {
                 Log.e(TAG, "Video use case binding failed for $currentModule: ${e.message}", e)
+                onCameraErrorListener?.invoke("Video mode failed on device: ${e.localizedMessage}")
             }
             return
         }
 
-        // 2. Configure ImageCapture
+        // 2. Configure ImageCapture (matching 4:3 native ratio)
         val captureBuilder = ImageCapture.Builder()
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-            .setTargetRotation(previewView.display?.rotation ?: android.view.Surface.ROTATION_0)
-
-        // Set optimal resolution (e.g. 12.5 MP for Main Rear JN1)
-        val caps = discovery.getCapabilities(currentModule)
-        val targetSize = caps?.optimal12_5MPResolution ?: caps?.maxPhotoResolution
-        if (targetSize != null) {
-            captureBuilder.setTargetResolution(targetSize.toSize())
-        }
+            .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+            .setTargetRotation(displayRotation)
 
         val camera2CaptureExtender = Camera2Interop.Extender(captureBuilder)
         configureCamera2CaptureSession(camera2CaptureExtender)
 
         imageCapture = captureBuilder.build()
 
-        // 3. Configure ImageAnalysis for Live Histogram, Peaking, Scene Metrics
+        // 3. Configure ImageAnalysis for Live Histogram, Peaking, Scene Metrics (matching 4:3 ratio)
         imageAnalysis = ImageAnalysis.Builder()
-            .setTargetResolution(Size(640, 480))
+            .setTargetAspectRatio(AspectRatio.RATIO_4_3)
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .build()
             .also { analysis ->
@@ -176,6 +181,10 @@ class CameraEngine(
                 }
             }
 
+        // Progressive Binding Strategy to guarantee preview display on any hardware HAL
+        var bound = false
+
+        // Tier 1: Try full 3 use cases (Preview + Capture + Analysis)
         try {
             camera = provider.bindToLifecycle(
                 lifecycleOwner,
@@ -184,210 +193,293 @@ class CameraEngine(
                 imageCapture,
                 imageAnalysis
             )
-            applyHardwareTuning()
-            Log.i(TAG, "Camera bound successfully for module $currentModule (mode: $currentMode)")
+            bound = true
+            Log.i(TAG, "Tier 1: Camera bound with Preview + Capture + Analysis for $currentModule")
         } catch (e: Exception) {
-            Log.e(TAG, "Use case binding failed for $currentModule: ${e.message}", e)
+            Log.w(TAG, "Tier 1 binding failed on device HAL ($currentModule): ${e.message}. Falling back to Tier 2...")
         }
+
+        // Tier 2: Fallback to 2-stream mode (Preview + Capture) without ImageAnalysis
+        if (!bound) {
+            try {
+                provider.unbindAll()
+                imageAnalysis = null
+                camera = provider.bindToLifecycle(
+                    lifecycleOwner,
+                    selector,
+                    preview,
+                    imageCapture
+                )
+                bound = true
+                Log.i(TAG, "Tier 2: Camera bound with Preview + Capture for $currentModule")
+            } catch (e: Exception) {
+                Log.w(TAG, "Tier 2 binding failed ($currentModule): ${e.message}. Falling back to Tier 3 Safe Base Mode...")
+            }
+        }
+
+        // Tier 3: Safe Base Mode with guaranteed standard camera selector and clean builders
+        if (!bound) {
+            try {
+                provider.unbindAll()
+                imageAnalysis = null
+                val safeSelector = if (currentModule.isFrontFacing) {
+                    CameraSelector.DEFAULT_FRONT_CAMERA
+                } else {
+                    CameraSelector.DEFAULT_BACK_CAMERA
+                }
+                val safePreview = Preview.Builder()
+                    .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+                    .build().also {
+                        it.setSurfaceProvider(previewView.surfaceProvider)
+                    }
+                val safeCapture = ImageCapture.Builder()
+                    .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+                    .build()
+                camera = provider.bindToLifecycle(
+                    lifecycleOwner,
+                    safeSelector,
+                    safePreview,
+                    safeCapture
+                )
+                preview = safePreview
+                imageCapture = safeCapture
+                Log.i(TAG, "Tier 3: Safe Base Mode bound successfully for $currentModule")
+            } catch (e: Exception) {
+                Log.e(TAG, "All camera binding tiers failed for $currentModule: ${e.message}", e)
+                onCameraErrorListener?.invoke("Unable to initialize camera sensor: ${e.localizedMessage}")
+                return
+            }
+        }
+
+        applyHardwareTuning()
     }
 
     /**
      * Injects low-level Camera2 CaptureRequest options.
-     * Overrides stock aggressive noise reduction and artificial unsharp edge filtering.
+     * Safely guarded to prevent hardware-level rejection on MediaTek Helio G85.
      */
     @SuppressLint("UnsafeOptInUsageError")
     private fun <T> configureCamera2CaptureSession(extender: Camera2Interop.Extender<T>) {
-        // Suppress destructive stock smearing and halo edge processing
-        extender.setCaptureRequestOption(
-            CaptureRequest.NOISE_REDUCTION_MODE,
-            CaptureRequest.NOISE_REDUCTION_MODE_FAST
-        )
-        extender.setCaptureRequestOption(
-            CaptureRequest.EDGE_MODE,
-            CaptureRequest.EDGE_MODE_FAST
-        )
-
-        // Video stabilization if supported
-        val caps = discovery.getCapabilities(currentModule)
-        if (caps?.isVideoStabilizationSupported == true) {
+        try {
             extender.setCaptureRequestOption(
-                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
+                CaptureRequest.NOISE_REDUCTION_MODE,
+                CaptureRequest.NOISE_REDUCTION_MODE_FAST
             )
-        }
+            extender.setCaptureRequestOption(
+                CaptureRequest.EDGE_MODE,
+                CaptureRequest.EDGE_MODE_FAST
+            )
 
-        // Pro Mode manual controls
-        if (currentMode.supportsProControls) {
-            if (manualIso != null && manualExposureTimeNs != null) {
+            // Video stabilization if supported
+            val caps = discovery.getCapabilities(currentModule)
+            if (caps?.isVideoStabilizationSupported == true) {
                 extender.setCaptureRequestOption(
-                    CaptureRequest.CONTROL_AE_MODE,
-                    CaptureRequest.CONTROL_AE_MODE_OFF
-                )
-                extender.setCaptureRequestOption(
-                    CaptureRequest.SENSOR_SENSITIVITY,
-                    manualIso!!
-                )
-                extender.setCaptureRequestOption(
-                    CaptureRequest.SENSOR_EXPOSURE_TIME,
-                    manualExposureTimeNs!!
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
                 )
             }
-            if (manualFocusDistanceDiopters != null && !caps!!.isFixedFocus) {
-                extender.setCaptureRequestOption(
-                    CaptureRequest.CONTROL_AF_MODE,
-                    CaptureRequest.CONTROL_AF_MODE_OFF
-                )
-                extender.setCaptureRequestOption(
-                    CaptureRequest.LENS_FOCUS_DISTANCE,
-                    manualFocusDistanceDiopters!!
-                )
+
+            // Pro Mode manual controls
+            if (currentMode.supportsProControls) {
+                if (manualIso != null && manualExposureTimeNs != null) {
+                    extender.setCaptureRequestOption(
+                        CaptureRequest.CONTROL_AE_MODE,
+                        CaptureRequest.CONTROL_AE_MODE_OFF
+                    )
+                    extender.setCaptureRequestOption(
+                        CaptureRequest.SENSOR_SENSITIVITY,
+                        manualIso!!
+                    )
+                    extender.setCaptureRequestOption(
+                        CaptureRequest.SENSOR_EXPOSURE_TIME,
+                        manualExposureTimeNs!!
+                    )
+                }
+                if (manualFocusDistanceDiopters != null && caps?.isFixedFocus == false) {
+                    extender.setCaptureRequestOption(
+                        CaptureRequest.CONTROL_AF_MODE,
+                        CaptureRequest.CONTROL_AF_MODE_OFF
+                    )
+                    extender.setCaptureRequestOption(
+                        CaptureRequest.LENS_FOCUS_DISTANCE,
+                        manualFocusDistanceDiopters!!
+                    )
+                }
             }
+        } catch (e: Exception) {
+            Log.w(TAG, "configureCamera2CaptureSession non-critical: ${e.message}")
         }
     }
 
     /**
      * Dynamically updates live camera controls via Camera2CameraControl.
+     * Guarded with try-catch so an unsupported key never crashes the camera session.
      */
     @SuppressLint("UnsafeOptInUsageError")
     fun applyHardwareTuning() {
         val cam = camera ?: return
-        val cameraControl = cam.cameraControl
-        val camera2Control = Camera2CameraControl.from(cameraControl)
+        try {
+            val cameraControl = cam.cameraControl
+            val camera2Control = Camera2CameraControl.from(cameraControl)
 
-        val optionsBuilder = CaptureRequestOptions.Builder()
+            val optionsBuilder = CaptureRequestOptions.Builder()
 
-        // Set exposure compensation
-        cameraControl.setExposureCompensationIndex(exposureCompensationIndex)
+            // Set exposure compensation safely
+            try {
+                cameraControl.setExposureCompensationIndex(exposureCompensationIndex)
+            } catch (e: Exception) {
+                Log.w(TAG, "Exposure compensation non-critical: ${e.message}")
+            }
 
-        // Apply Pro mode manual overrides if configured
-        if (currentMode.supportsProControls) {
-            if (manualIso != null && manualExposureTimeNs != null) {
-                optionsBuilder.setCaptureRequestOption(
-                    CaptureRequest.CONTROL_AE_MODE,
-                    CaptureRequest.CONTROL_AE_MODE_OFF
-                )
-                optionsBuilder.setCaptureRequestOption(
-                    CaptureRequest.SENSOR_SENSITIVITY,
-                    manualIso!!
-                )
-                optionsBuilder.setCaptureRequestOption(
-                    CaptureRequest.SENSOR_EXPOSURE_TIME,
-                    manualExposureTimeNs!!
-                )
+            // Apply Pro mode manual overrides if configured
+            if (currentMode.supportsProControls) {
+                if (manualIso != null && manualExposureTimeNs != null) {
+                    optionsBuilder.setCaptureRequestOption(
+                        CaptureRequest.CONTROL_AE_MODE,
+                        CaptureRequest.CONTROL_AE_MODE_OFF
+                    )
+                    optionsBuilder.setCaptureRequestOption(
+                        CaptureRequest.SENSOR_SENSITIVITY,
+                        manualIso!!
+                    )
+                    optionsBuilder.setCaptureRequestOption(
+                        CaptureRequest.SENSOR_EXPOSURE_TIME,
+                        manualExposureTimeNs!!
+                    )
+                } else {
+                    optionsBuilder.setCaptureRequestOption(
+                        CaptureRequest.CONTROL_AE_MODE,
+                        CaptureRequest.CONTROL_AE_MODE_ON
+                    )
+                }
+
+                val caps = discovery.getCapabilities(currentModule)
+                if (manualFocusDistanceDiopters != null && caps?.isFixedFocus == false) {
+                    optionsBuilder.setCaptureRequestOption(
+                        CaptureRequest.CONTROL_AF_MODE,
+                        CaptureRequest.CONTROL_AF_MODE_OFF
+                    )
+                    optionsBuilder.setCaptureRequestOption(
+                        CaptureRequest.LENS_FOCUS_DISTANCE,
+                        manualFocusDistanceDiopters!!
+                    )
+                } else if (caps?.isFixedFocus == false) {
+                    optionsBuilder.setCaptureRequestOption(
+                        CaptureRequest.CONTROL_AF_MODE,
+                        CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+                    )
+                }
             } else {
+                // Automatic 3A mode
                 optionsBuilder.setCaptureRequestOption(
                     CaptureRequest.CONTROL_AE_MODE,
                     CaptureRequest.CONTROL_AE_MODE_ON
                 )
+                val caps = discovery.getCapabilities(currentModule)
+                if (caps?.isFixedFocus == false) {
+                    optionsBuilder.setCaptureRequestOption(
+                        CaptureRequest.CONTROL_AF_MODE,
+                        CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+                    )
+                }
             }
 
+            // White balance tuning (Pro mode manual WB / Kelvin vs Auto)
             val caps = discovery.getCapabilities(currentModule)
-            if (manualFocusDistanceDiopters != null && caps?.isFixedFocus == false) {
-                optionsBuilder.setCaptureRequestOption(
-                    CaptureRequest.CONTROL_AF_MODE,
-                    CaptureRequest.CONTROL_AF_MODE_OFF
-                )
-                optionsBuilder.setCaptureRequestOption(
-                    CaptureRequest.LENS_FOCUS_DISTANCE,
-                    manualFocusDistanceDiopters!!
-                )
-            } else if (caps?.isFixedFocus == false) {
-                optionsBuilder.setCaptureRequestOption(
-                    CaptureRequest.CONTROL_AF_MODE,
-                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
-                )
-            }
-        } else {
-            // Automatic 3A mode
-            optionsBuilder.setCaptureRequestOption(
-                CaptureRequest.CONTROL_AE_MODE,
-                CaptureRequest.CONTROL_AE_MODE_ON
-            )
-            val caps = discovery.getCapabilities(currentModule)
-            if (caps?.isFixedFocus == false) {
-                optionsBuilder.setCaptureRequestOption(
-                    CaptureRequest.CONTROL_AF_MODE,
-                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
-                )
-            }
-        }
-
-        // White balance tuning (Pro mode manual WB / Kelvin vs Auto)
-        val caps = discovery.getCapabilities(currentModule)
-        if (currentMode.supportsProControls && manualWbPreset != ProModeController.WhiteBalancePreset.AUTO) {
-            if (manualWbPreset == ProModeController.WhiteBalancePreset.CUSTOM_KELVIN) {
-                optionsBuilder.setCaptureRequestOption(
-                    CaptureRequest.CONTROL_AWB_MODE,
-                    CaptureRequest.CONTROL_AWB_MODE_OFF
-                )
-                val proController = ProModeController(caps)
-                val gains = proController.kelvinToRggbGains(manualKelvin)
-                optionsBuilder.setCaptureRequestOption(
-                    CaptureRequest.COLOR_CORRECTION_MODE,
-                    CaptureRequest.COLOR_CORRECTION_MODE_FAST
-                )
-                optionsBuilder.setCaptureRequestOption(
-                    CaptureRequest.COLOR_CORRECTION_GAINS,
-                    gains
-                )
+            if (currentMode.supportsProControls && manualWbPreset != ProModeController.WhiteBalancePreset.AUTO) {
+                if (manualWbPreset == ProModeController.WhiteBalancePreset.CUSTOM_KELVIN) {
+                    optionsBuilder.setCaptureRequestOption(
+                        CaptureRequest.CONTROL_AWB_MODE,
+                        CaptureRequest.CONTROL_AWB_MODE_OFF
+                    )
+                    val proController = ProModeController(caps)
+                    val gains = proController.kelvinToRggbGains(manualKelvin)
+                    optionsBuilder.setCaptureRequestOption(
+                        CaptureRequest.COLOR_CORRECTION_MODE,
+                        CaptureRequest.COLOR_CORRECTION_MODE_FAST
+                    )
+                    optionsBuilder.setCaptureRequestOption(
+                        CaptureRequest.COLOR_CORRECTION_GAINS,
+                        gains
+                    )
+                } else {
+                    optionsBuilder.setCaptureRequestOption(
+                        CaptureRequest.CONTROL_AWB_MODE,
+                        manualWbPreset.awbMode
+                    )
+                }
             } else {
                 optionsBuilder.setCaptureRequestOption(
                     CaptureRequest.CONTROL_AWB_MODE,
-                    manualWbPreset.awbMode
+                    CaptureRequest.CONTROL_AWB_MODE_AUTO
                 )
             }
-        } else {
-            optionsBuilder.setCaptureRequestOption(
-                CaptureRequest.CONTROL_AWB_MODE,
-                CaptureRequest.CONTROL_AWB_MODE_AUTO
-            )
+
+            // Video stabilization when in video mode
+            if (currentMode.isVideo && videoEngine.currentConfig.isEisStabilizationEnabled) {
+                optionsBuilder.setCaptureRequestOption(
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
+                )
+            }
+
+            // Noise reduction tuning based on profile
+            val noiseMode = when (currentProfile) {
+                ProcessingProfile.NATURAL -> CaptureRequest.NOISE_REDUCTION_MODE_FAST
+                ProcessingProfile.BALANCED, ProcessingProfile.DETAILED -> CaptureRequest.NOISE_REDUCTION_MODE_FAST
+                ProcessingProfile.VIBRANT -> CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
+            }
+            optionsBuilder.setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, noiseMode)
+
+            // Edge enhancement tuning: EDGE_MODE_FAST is guaranteed supported across all Android Camera2 levels
+            optionsBuilder.setCaptureRequestOption(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
+
+            camera2Control.setCaptureRequestOptions(optionsBuilder.build())
+        } catch (e: Exception) {
+            Log.w(TAG, "applyHardwareTuning non-critical: ${e.message}")
         }
-
-        // Video stabilization when in video mode
-        if (currentMode.isVideo && videoEngine.currentConfig.isEisStabilizationEnabled) {
-            optionsBuilder.setCaptureRequestOption(
-                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
-            )
-        }
-
-        // Noise reduction tuning based on profile
-        val noiseMode = when (currentProfile) {
-            ProcessingProfile.NATURAL -> CaptureRequest.NOISE_REDUCTION_MODE_MINIMAL
-            ProcessingProfile.BALANCED, ProcessingProfile.DETAILED -> CaptureRequest.NOISE_REDUCTION_MODE_FAST
-            ProcessingProfile.VIBRANT -> CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
-        }
-        optionsBuilder.setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, noiseMode)
-
-        // Edge enhancement tuning: stock edge mode off to let MotoVision Pro's sharpness engine do it cleanly
-        optionsBuilder.setCaptureRequestOption(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
-
-        camera2Control.setCaptureRequestOptions(optionsBuilder.build())
     }
 
     /**
      * Resolves the proper CameraSelector for a CameraModule.
+     * Uses guaranteed DEFAULT_BACK_CAMERA / DEFAULT_FRONT_CAMERA for primary lenses,
+     * and safely validates auxiliary camera IDs against CameraProvider before selecting.
      */
-    private fun selectCameraForModule(module: CameraModule): CameraSelector {
-        val targetId = discovery.getCameraIdForModule(module)
+    fun selectCameraForModule(module: CameraModule): CameraSelector {
+        if (module == CameraModule.FRONT) {
+            return CameraSelector.DEFAULT_FRONT_CAMERA
+        }
+        if (module == CameraModule.MAIN_REAR) {
+            return CameraSelector.DEFAULT_BACK_CAMERA
+        }
 
-        return if (targetId != null) {
-            CameraSelector.Builder()
+        // Auxiliary modules (Ultrawide, Macro)
+        val targetId = discovery.getCameraIdForModule(module)
+        val provider = cameraProvider
+
+        if (targetId != null) {
+            val auxSelector = CameraSelector.Builder()
+                .requireLensFacing(CameraSelector.LENS_FACING_BACK)
                 .addCameraFilter { cameraInfos ->
                     cameraInfos.filter { info ->
-                        @SuppressLint("UnsafeOptInUsageError")
-                        val id = Camera2CameraInfo.from(info).cameraId
-                        id == targetId
+                        try {
+                            @SuppressLint("UnsafeOptInUsageError")
+                            val id = Camera2CameraInfo.from(info).cameraId
+                            id == targetId
+                        } catch (e: Exception) {
+                            false
+                        }
                     }
                 }
                 .build()
-        } else {
-            if (module.isFrontFacing) {
-                CameraSelector.DEFAULT_FRONT_CAMERA
-            } else {
-                CameraSelector.DEFAULT_BACK_CAMERA
+
+            if (provider != null && provider.hasCamera(auxSelector)) {
+                return auxSelector
             }
+            Log.w(TAG, "Auxiliary camera ID $targetId for $module not exposed to CameraX, falling back to DEFAULT_BACK_CAMERA")
         }
+
+        return CameraSelector.DEFAULT_BACK_CAMERA
     }
 
     fun triggerFocusAndMetering(x: Float, y: Float) {

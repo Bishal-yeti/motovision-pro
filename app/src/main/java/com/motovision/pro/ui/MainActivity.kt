@@ -44,30 +44,24 @@ class MainActivity : AppCompatActivity() {
     private lateinit var captureController: CaptureController
 
     private var lastCaptureResult: CaptureResultData? = null
+    private val isAnalyzing = java.util.concurrent.atomic.AtomicBoolean(false)
+    private var lastAnalysisTimestampMs = 0L
 
-    private val requiredPermissions: Array<String>
-        get() {
-            val permissions = mutableListOf(
-                Manifest.permission.CAMERA,
-                Manifest.permission.RECORD_AUDIO
-            )
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                permissions.add(Manifest.permission.READ_MEDIA_IMAGES)
-                permissions.add(Manifest.permission.READ_MEDIA_VIDEO)
-            } else {
-                permissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            }
-            return permissions.toTypedArray()
-        }
-
-    private val permissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { results ->
-        val cameraGranted = results[Manifest.permission.CAMERA] ?: false
+    private val cameraPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { cameraGranted ->
         if (cameraGranted) {
             setupCamera()
         } else {
             Toast.makeText(this, R.string.camera_permission_required, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private val audioPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { audioGranted ->
+        if (!audioGranted) {
+            Toast.makeText(this, "Audio permission is recommended for video recording", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -81,29 +75,30 @@ class MainActivity : AppCompatActivity() {
 
         setupUI()
 
-        if (allPermissionsGranted()) {
+        // Only CAMERA is mandatory to open viewfinder and capture photos
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             setupCamera()
         } else {
-            permissionLauncher.launch(requiredPermissions)
-        }
-    }
-
-    private fun allPermissionsGranted(): Boolean {
-        return requiredPermissions.all {
-            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
 
     private fun setupCamera() {
         captureController.imageProcessorHook = { inputFile, outputFile, profile, mode, module ->
-            kotlinx.coroutines.runBlocking {
-                com.motovision.pro.processing.ImageProcessingEngine.processImageFile(
-                    inputFile,
-                    outputFile,
-                    profile,
-                    mode,
-                    module
-                )
+            com.motovision.pro.processing.ImageProcessingEngine.processImageFile(
+                inputFile,
+                outputFile,
+                profile,
+                mode,
+                module
+            )
+        }
+
+        cameraEngine.onCameraErrorListener = { errorMessage ->
+            runOnUiThread {
+                binding.txtStatus.text = errorMessage
+                binding.txtStatus.visibility = View.VISIBLE
+                Toast.makeText(this, errorMessage, Toast.LENGTH_LONG).show()
             }
         }
 
@@ -114,7 +109,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Live frame analysis for Histogram and Focus Peaking
+        // Live frame analysis for Histogram and Focus Peaking (throttled)
         cameraEngine.frameAnalysisListener = { imageProxy ->
             computeHistogramAndMetrics(imageProxy)
         }
@@ -364,6 +359,10 @@ class MainActivity : AppCompatActivity() {
             binding.proControlPanel.visibility = View.GONE
             binding.focusPeakingOverlay.isPeakingEnabled = false
             binding.histogramView.visibility = View.GONE
+
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            }
         } else if (mode.supportsProControls) {
             binding.videoControlPanel.visibility = View.GONE
             binding.proControlPanel.visibility = View.VISIBLE
@@ -544,8 +543,30 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Extracts luminance and RGB histogram bins from real-time YUV analysis frames.
+     * Throttled to max 10 fps with frame dropping to prevent UI thread flooding and ANR.
      */
     private fun computeHistogramAndMetrics(imageProxy: ImageProxy) {
+        val now = System.currentTimeMillis()
+        if (now - lastAnalysisTimestampMs < 100L) {
+            imageProxy.close()
+            return
+        }
+
+        val showHistogram = binding.histogramView.visibility == View.VISIBLE
+        val showPeaking = binding.focusPeakingOverlay.isPeakingEnabled
+
+        if (!showHistogram && !showPeaking) {
+            imageProxy.close()
+            return
+        }
+
+        if (!isAnalyzing.compareAndSet(false, true)) {
+            imageProxy.close()
+            return
+        }
+
+        lastAnalysisTimestampMs = now
+
         try {
             val yPlane = imageProxy.planes[0]
             val buffer = yPlane.buffer
@@ -555,7 +576,7 @@ class MainActivity : AppCompatActivity() {
             val height = imageProxy.height
 
             // 1. Focus Peaking if enabled
-            if (binding.focusPeakingOverlay.isPeakingEnabled) {
+            if (showPeaking) {
                 val peakingBmp = FocusPeakingEngine.generatePeakingBitmap(
                     yBuffer = buffer,
                     width = width,
@@ -568,54 +589,57 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            // 2. Real-time Luminance and RGB Histogram
-            val lumBins = IntArray(256)
-            val redBins = IntArray(256)
-            val greenBins = IntArray(256)
-            val blueBins = IntArray(256)
+            // 2. Real-time Luminance and RGB Histogram if visible
+            if (showHistogram) {
+                val lumBins = IntArray(256)
+                val redBins = IntArray(256)
+                val greenBins = IntArray(256)
+                val blueBins = IntArray(256)
 
-            val uPlane = imageProxy.planes.getOrNull(1)
-            val vPlane = imageProxy.planes.getOrNull(2)
+                val uPlane = imageProxy.planes.getOrNull(1)
+                val vPlane = imageProxy.planes.getOrNull(2)
 
-            val step = 4
-            for (y in 0 until height step step) {
-                val yRow = y * rowStride
-                for (x in 0 until width step step) {
-                    val yIndex = yRow + x * pixelStride
-                    if (yIndex < buffer.remaining()) {
-                        val lum = buffer.get(yIndex).toInt() and 0xFF
-                        lumBins[lum]++
+                val step = 8 // Downsample step from 4 to 8 for <0.5ms computation on Helio G85
+                for (y in 0 until height step step) {
+                    val yRow = y * rowStride
+                    for (x in 0 until width step step) {
+                        val yIndex = yRow + x * pixelStride
+                        if (yIndex < buffer.remaining()) {
+                            val lum = buffer.get(yIndex).toInt() and 0xFF
+                            lumBins[lum]++
 
-                        if (uPlane != null && vPlane != null) {
-                            val uvY = y / 2
-                            val uvX = x / 2
-                            val uIndex = uvY * uPlane.rowStride + uvX * uPlane.pixelStride
-                            val vIndex = uvY * vPlane.rowStride + uvX * vPlane.pixelStride
+                            if (uPlane != null && vPlane != null) {
+                                val uvY = y / 2
+                                val uvX = x / 2
+                                val uIndex = uvY * uPlane.rowStride + uvX * uPlane.pixelStride
+                                val vIndex = uvY * vPlane.rowStride + uvX * vPlane.pixelStride
 
-                            if (uIndex < uPlane.buffer.remaining() && vIndex < vPlane.buffer.remaining()) {
-                                val u = (uPlane.buffer.get(uIndex).toInt() and 0xFF) - 128
-                                val v = (vPlane.buffer.get(vIndex).toInt() and 0xFF) - 128
+                                if (uIndex < uPlane.buffer.remaining() && vIndex < vPlane.buffer.remaining()) {
+                                    val u = (uPlane.buffer.get(uIndex).toInt() and 0xFF) - 128
+                                    val v = (vPlane.buffer.get(vIndex).toInt() and 0xFF) - 128
 
-                                val r = (lum + 1.402f * v).toInt().coerceIn(0, 255)
-                                val g = (lum - 0.344136f * u - 0.714136f * v).toInt().coerceIn(0, 255)
-                                val b = (lum + 1.772f * u).toInt().coerceIn(0, 255)
+                                    val r = (lum + 1.402f * v).toInt().coerceIn(0, 255)
+                                    val g = (lum - 0.344136f * u - 0.714136f * v).toInt().coerceIn(0, 255)
+                                    val b = (lum + 1.772f * u).toInt().coerceIn(0, 255)
 
-                                redBins[r]++
-                                greenBins[g]++
-                                blueBins[b]++
+                                    redBins[r]++
+                                    greenBins[g]++
+                                    blueBins[b]++
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            runOnUiThread {
-                binding.histogramView.updateHistogram(lumBins, redBins, greenBins, blueBins)
+                runOnUiThread {
+                    binding.histogramView.updateHistogram(lumBins, redBins, greenBins, blueBins)
+                }
             }
         } catch (e: Exception) {
             Log.w(TAG, "Error computing live histogram & peaking: ${e.message}")
         } finally {
             imageProxy.close()
+            isAnalyzing.set(false)
         }
     }
 

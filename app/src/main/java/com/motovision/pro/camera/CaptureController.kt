@@ -49,7 +49,7 @@ class CaptureController(
     var onCaptureComplete: ((CaptureResultData) -> Unit)? = null
 
     // Image processor hook (injected in Milestone 3)
-    var imageProcessorHook: ((File, File, ProcessingProfile, CaptureMode, com.motovision.pro.model.CameraModule) -> Unit)? = null
+    var imageProcessorHook: (suspend (File, File, ProcessingProfile, CaptureMode, com.motovision.pro.model.CameraModule) -> Unit)? = null
 
     val rawCaptureManager = com.motovision.pro.pro.RawCaptureManager(context)
 
