@@ -48,16 +48,14 @@ graph TD
 
 ## Deliverables & Compilation
 
-### Pre-Built APK Artifacts
-Both release and debug APKs have been compiled and verified in the project repository:
+### Direct APK Download Links
+Both release and debug APKs are compiled, verified, and hosted directly in this repository for one-click download:
 
-- **Release APK (Optimized):**
-  - Path: `app/build/outputs/apk/release/app-release.apk`
-  - Size: 5.5 MB (5,744,302 bytes)
+- 🚀 [**Download MotoVisionPro-Release.apk (5.5 MB)**](https://github.com/Bishal-yeti/motovision-pro/raw/main/dist/MotoVisionPro-Release.apk)
+  - **Recommended for sideloading on your Moto G23.** Optimized DEX, signed release package.
   - SHA-256: `0b4208994331dde3c66cb72f5d652e35ec323117d5363e863c6c6472154cf125`
-- **Debug APK (Development & Logs):**
-  - Path: `app/build/outputs/apk/debug/app-debug.apk`
-  - Size: 7.7 MB (8,024,809 bytes)
+- 🛠️ [**Download MotoVisionPro-Debug.apk (7.7 MB)**](https://github.com/Bishal-yeti/motovision-pro/raw/main/dist/MotoVisionPro-Debug.apk)
+  - Diagnostic build with debug symbols and verbose logcat instrumentation.
   - SHA-256: `317852a9e59ab5cd05f9de5ac33d2ae905a9d817383a38cb0afb6462bf65edc2`
 
 ### Building from Source
