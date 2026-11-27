@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.util.Range
+import android.view.ScaleGestureDetector
 import android.view.View
 import android.widget.PopupMenu
 import android.widget.TextView
@@ -32,6 +33,7 @@ import com.motovision.pro.pro.ProModeController
 import com.motovision.pro.video.VideoConfiguration
 import com.motovision.pro.video.VideoRecordingEngine
 import java.nio.ByteBuffer
+import java.util.Locale
 
 /**
  * Main camera activity providing a professional viewfinder interface,
@@ -42,10 +44,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var cameraEngine: CameraEngine
     private lateinit var captureController: CaptureController
+    private lateinit var scaleGestureDetector: ScaleGestureDetector
 
     private var lastCaptureResult: CaptureResultData? = null
     private val isAnalyzing = java.util.concurrent.atomic.AtomicBoolean(false)
     private var lastAnalysisTimestampMs = 0L
+
+    private val hideZoomIndicatorRunnable = Runnable {
+        binding.txtZoomIndicator.visibility = View.GONE
+    }
 
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -106,6 +113,7 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 updateLensUi(cameraEngine.currentModule)
                 setupProControlsFromCapabilities()
+                observeZoomState()
             }
         }
 
@@ -280,7 +288,7 @@ class MainActivity : AppCompatActivity() {
 
         // Quick B&W Toggle Button
         binding.btnQuickBw.setOnClickListener {
-            val isCurrentlyBw = cameraEngine.currentProfile == ProcessingProfile.MONOCHROME
+            val isCurrentlyBw = cameraEngine.currentProfile.isMonochrome
             val targetProfile = if (isCurrentlyBw) ProcessingProfile.BALANCED else ProcessingProfile.MONOCHROME
             applyProfileSelection(targetProfile)
         }
@@ -299,9 +307,25 @@ class MainActivity : AppCompatActivity() {
             binding.comparisonContainer.visibility = View.GONE
         }
 
-        // Touch to focus and metering
+        // Digital Zoom Pinch Gesture & Quick Zoom Chips (1x, 2x, 4x)
+        scaleGestureDetector = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                val currentRatio = cameraEngine.getZoomRatio()
+                val delta = detector.scaleFactor
+                val newRatio = currentRatio * delta
+                cameraEngine.setZoomRatio(newRatio)
+                return true
+            }
+        })
+
+        binding.btnZoom1x.setOnClickListener { cameraEngine.setZoomRatio(1.0f) }
+        binding.btnZoom2x.setOnClickListener { cameraEngine.setZoomRatio(2.0f) }
+        binding.btnZoom4x.setOnClickListener { cameraEngine.setZoomRatio(4.0f) }
+
+        // Touch to focus and metering with pinch-to-zoom delegation
         binding.viewFinder.setOnTouchListener { _, event ->
-            if (event.action == android.view.MotionEvent.ACTION_UP) {
+            scaleGestureDetector.onTouchEvent(event)
+            if (event.action == android.view.MotionEvent.ACTION_UP && !scaleGestureDetector.isInProgress && event.pointerCount == 1) {
                 cameraEngine.triggerFocusAndMetering(event.x, event.y)
             }
             true
@@ -318,6 +342,7 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 updateLensUi(module)
                 setupProControlsFromCapabilities()
+                observeZoomState()
             }
         }
     }
@@ -402,12 +427,42 @@ class MainActivity : AppCompatActivity() {
     private fun applyProfileSelection(profile: ProcessingProfile) {
         cameraEngine.setProcessingProfile(profile)
         binding.btnProfile.text = profile.title
-        val isBw = profile == ProcessingProfile.MONOCHROME
+        val isBw = profile.isMonochrome
         val activeColor = ContextCompat.getColor(this, R.color.mv_primary)
         val defaultColor = ContextCompat.getColor(this, R.color.mv_text_secondary)
         binding.btnQuickBw.setTextColor(if (isBw) activeColor else defaultColor)
         val badge = if (isBw) " [B&W ACTIVE]" else ""
         Toast.makeText(this, "${profile.title} profile active$badge", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun observeZoomState() {
+        cameraEngine.getZoomState()?.observe(this) { zoomState ->
+            val ratio = zoomState.zoomRatio
+            updateZoomUi(ratio)
+        }
+    }
+
+    private fun updateZoomUi(ratio: Float) {
+        binding.txtZoomIndicator.text = String.format(Locale.US, "%.1fx", ratio)
+        binding.txtZoomIndicator.visibility = View.VISIBLE
+        binding.txtZoomIndicator.removeCallbacks(hideZoomIndicatorRunnable)
+        binding.txtZoomIndicator.postDelayed(hideZoomIndicatorRunnable, 1500L)
+
+        val activeColor = ContextCompat.getColor(this, R.color.mv_primary)
+        val defaultColor = ContextCompat.getColor(this, R.color.mv_text_secondary)
+
+        val is1x = Math.abs(ratio - 1.0f) < 0.15f
+        val is2x = Math.abs(ratio - 2.0f) < 0.25f
+        val is4x = Math.abs(ratio - 4.0f) < 0.35f
+
+        binding.btnZoom1x.setTextColor(if (is1x) activeColor else defaultColor)
+        binding.btnZoom1x.setBackgroundResource(if (is1x) R.drawable.bg_lens_active else 0)
+
+        binding.btnZoom2x.setTextColor(if (is2x) activeColor else defaultColor)
+        binding.btnZoom2x.setBackgroundResource(if (is2x) R.drawable.bg_lens_active else 0)
+
+        binding.btnZoom4x.setTextColor(if (is4x) activeColor else defaultColor)
+        binding.btnZoom4x.setBackgroundResource(if (is4x) R.drawable.bg_lens_active else 0)
     }
 
     private fun setupProControlsFromCapabilities() {

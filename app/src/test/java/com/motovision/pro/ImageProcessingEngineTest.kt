@@ -202,4 +202,68 @@ class ImageProcessingEngineTest {
             assertTrue("Pixel luminance must be valid", r in 0..255)
         }
     }
+
+    @Test
+    fun testBwVintageSepiaToning() {
+        val width = 16
+        val height = 16
+        val pixels = IntArray(width * height) { 0xFF808080.toInt() } // Neutral mid-gray
+
+        val sepiaOutput = ColorSciencePipeline.processColors(
+            pixels,
+            width,
+            height,
+            ProcessingProfile.BW_VINTAGE
+        )
+
+        for (i in sepiaOutput.indices) {
+            val pixel = sepiaOutput[i]
+            val r = (pixel ushr 16) and 0xFF
+            val g = (pixel ushr 8) and 0xFF
+            val b = pixel and 0xFF
+            // Sepia toning must be warm: R >= G >= B
+            assertTrue("Sepia R ($r) must be >= G ($g)", r >= g)
+            assertTrue("Sepia G ($g) must be >= B ($b)", g >= b)
+        }
+    }
+
+    @Test
+    fun testWarmFilmAndCoolCinemaFilters() {
+        val width = 16
+        val height = 16
+        val pixels = IntArray(width * height) { 0xFF808080.toInt() }
+
+        val warmOutput = ColorSciencePipeline.processColors(pixels, width, height, ProcessingProfile.WARM_FILM)
+        val warmPixel = warmOutput[0]
+        val warmR = (warmPixel ushr 16) and 0xFF
+        val warmB = warmPixel and 0xFF
+        assertTrue("Warm Film should boost red over blue", warmR > warmB)
+
+        // Dark shadows in Cool Cinema should shift toward teal (B > R)
+        val shadowPixels = IntArray(width * height) { 0xFF282828.toInt() }
+        val coolOutput = ColorSciencePipeline.processColors(shadowPixels, width, height, ProcessingProfile.COOL_CINEMA)
+        val coolPixel = coolOutput[0]
+        val coolR = (coolPixel ushr 16) and 0xFF
+        val coolB = coolPixel and 0xFF
+        assertTrue("Cool Cinema shadows should have elevated blue/teal relative to red", coolB >= coolR)
+    }
+
+    @Test
+    fun testShadowChromaNoiseSuppression() {
+        val width = 16
+        val height = 16
+        // Underexposed pixel with extreme chroma noise (noisy purple/magenta in shadow: Y ~ 40, R=65, G=25, B=65)
+        val noisyShadowPixel = (0xFF shl 24) or (65 shl 16) or (25 shl 8) or 65
+        val pixels = IntArray(width * height) { noisyShadowPixel }
+
+        val cleanOutput = ColorSciencePipeline.processColors(pixels, width, height, ProcessingProfile.BALANCED)
+        val outPixel = cleanOutput[0]
+        val outR = (outPixel ushr 16) and 0xFF
+        val outG = (outPixel ushr 8) and 0xFF
+        val outB = outPixel and 0xFF
+
+        val inChromaSpread = Math.abs(65 - 25)
+        val outChromaSpread = Math.abs(outR - outG)
+        assertTrue("Chroma noise spread ($outChromaSpread) must be dampened compared to input ($inChromaSpread)", outChromaSpread < inChromaSpread)
+    }
 }

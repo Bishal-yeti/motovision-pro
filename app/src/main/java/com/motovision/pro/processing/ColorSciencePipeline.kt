@@ -58,18 +58,46 @@ object ColorSciencePipeline {
                             val monoLin = (linR * 0.35f + linG * 0.50f + linB * 0.15f).coerceAtLeast(0f)
                             val toneMono = ColorLut.applySoftKneeToneCurve(monoLin, contrast, rolloff)
                             val finalMono = ColorLut.linearToSrgb(toneMono)
-                            output[idx] = (a shl 24) or (finalMono shl 16) or (finalMono shl 8) or finalMono
+
+                            if (profile == ProcessingProfile.BW_VINTAGE) {
+                                // Classic silver-gelatin sepia toning
+                                val sepiaR = (finalMono * 1.08f).toInt().coerceIn(0, 255)
+                                val sepiaG = (finalMono * 0.98f).toInt().coerceIn(0, 255)
+                                val sepiaB = (finalMono * 0.80f).toInt().coerceIn(0, 255)
+                                output[idx] = (a shl 24) or (sepiaR shl 16) or (sepiaG shl 8) or sepiaB
+                            } else {
+                                output[idx] = (a shl 24) or (finalMono shl 16) or (finalMono shl 8) or finalMono
+                            }
                             continue
                         }
 
                         // 2. Compute Luminance and Chrominance in YCbCr
-                        val normR = (linR * 255f).coerceIn(0f, 255f)
-                        val normG = (linG * 255f).coerceIn(0f, 255f)
-                        val normB = (linB * 255f).coerceIn(0f, 255f)
+                        var normR = (linR * 255f).coerceIn(0f, 255f)
+                        var normG = (linG * 255f).coerceIn(0f, 255f)
+                        var normB = (linB * 255f).coerceIn(0f, 255f)
 
                         val Y = 0.299f * normR + 0.587f * normG + 0.114f * normB
-                        val Cb = 128f - 0.168736f * normR - 0.331264f * normG + 0.5f * normB
-                        val Cr = 128f + 0.5f * normR - 0.418688f * normG - 0.081312f * normB
+                        var Cb = 128f - 0.168736f * normR - 0.331264f * normG + 0.5f * normB
+                        var Cr = 128f + 0.5f * normR - 0.418688f * normG - 0.081312f * normB
+
+                        // Shadow Chroma Noise Suppression (removes purple/green color grain in underexposed areas)
+                        if (Y < 70f) {
+                            val shadowChromaDampen = (Y / 70f).coerceIn(0.25f, 1.0f)
+                            Cb = 128f + (Cb - 128f) * shadowChromaDampen
+                            Cr = 128f + (Cr - 128f) * shadowChromaDampen
+
+                            // Reconstruct clean RGB with suppressed chroma noise
+                            val cleanR = (Y + 1.402f * (Cr - 128f)).coerceIn(0f, 255f)
+                            val cleanG = (Y - 0.344136f * (Cb - 128f) - 0.714136f * (Cr - 128f)).coerceIn(0f, 255f)
+                            val cleanB = (Y + 1.772f * (Cb - 128f)).coerceIn(0f, 255f)
+
+                            linR = cleanR / 255f
+                            linG = cleanG / 255f
+                            linB = cleanB / 255f
+                            normR = cleanR
+                            normG = cleanG
+                            normB = cleanB
+                        }
 
                         // 3. Skin Tone Detection and Protection
                         // Human skin locus in YCbCr: Cb in [80..130], Cr in [133..175]
@@ -79,7 +107,39 @@ object ColorSciencePipeline {
                         // Green dominant: G > R + 15 and G > B + 15
                         val isGreenFoliage = (normG > normR + 15f) && (normG > normB + 15f)
 
-                        // 5. Apply Saturation Tuning
+                        // 5. Creative Filter Color Grading
+                        when (profile) {
+                            ProcessingProfile.WARM_FILM -> {
+                                // Kodachrome warm golden highlights, rich amber warmth
+                                linR *= 1.10f
+                                linG *= 1.03f
+                                linB *= 0.88f
+                            }
+                            ProcessingProfile.COOL_CINEMA -> {
+                                // Hollywood Teal & Orange: Cool cyan/teal shadows, warm amber highlights
+                                if (Y < 128f) {
+                                    val shadowFactor = (128f - Y) / 128f
+                                    linB *= (1.0f + 0.14f * shadowFactor)
+                                    linG *= (1.0f + 0.05f * shadowFactor)
+                                    linR *= (1.0f - 0.10f * shadowFactor)
+                                } else {
+                                    val highlightFactor = (Y - 128f) / 127f
+                                    linR *= (1.0f + 0.08f * highlightFactor)
+                                    linB *= (1.0f - 0.08f * highlightFactor)
+                                }
+                            }
+                            ProcessingProfile.PORTRAIT_SOFT -> {
+                                // Gentle flattering skin glow: delicate warm pastel midtones
+                                if (isSkin) {
+                                    linR *= 1.04f
+                                    linG *= 1.01f
+                                    linB *= 0.98f
+                                }
+                            }
+                            else -> { /* Standard profiles */ }
+                        }
+
+                        // 6. Apply Saturation Tuning
                         val effectiveSaturation = when {
                             isSkin -> 1.0f // Protect skin: zero artificial saturation boost
                             isGreenFoliage && profile == ProcessingProfile.VIBRANT -> 1.05f // Prevent neon greens
@@ -93,19 +153,19 @@ object ColorSciencePipeline {
                             linB = (lumNorm + (linB - lumNorm) * effectiveSaturation).coerceAtLeast(0f)
                         }
 
-                        // 6. Realistic Greens Calibration (shift toxic yellow-greens to natural leaf tones)
-                        if (isGreenFoliage) {
+                        // 7. Realistic Greens Calibration (shift toxic yellow-greens to natural leaf tones)
+                        if (isGreenFoliage && profile != ProcessingProfile.WARM_FILM && profile != ProcessingProfile.COOL_CINEMA) {
                             // Slightly warm the greens and roll off excess luminance
                             linG *= 0.96f
                             linR *= 1.03f
                         }
 
-                        // 7. Tone Mapping (Soft-Knee S-Curve with Highlight Rolloff)
+                        // 8. Tone Mapping (Soft-Knee S-Curve with Highlight Rolloff)
                         val toneR = ColorLut.applySoftKneeToneCurve(linR, contrast, rolloff)
                         val toneG = ColorLut.applySoftKneeToneCurve(linG, contrast, rolloff)
                         val toneB = ColorLut.applySoftKneeToneCurve(linB, contrast, rolloff)
 
-                        // 8. Convert back to 8-bit sRGB
+                        // 9. Convert back to 8-bit sRGB
                         val finalR = ColorLut.linearToSrgb(toneR)
                         val finalG = ColorLut.linearToSrgb(toneG)
                         val finalB = ColorLut.linearToSrgb(toneB)

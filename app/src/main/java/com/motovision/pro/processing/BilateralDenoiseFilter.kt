@@ -26,7 +26,7 @@ object BilateralDenoiseFilter {
         sigmaRange: Float,
         output: IntArray = IntArray(pixels.size)
     ): IntArray {
-        val radius = Math.ceil((sigmaSpatial * 1.5).toDouble()).toInt().coerceIn(1, 2)
+        val radius = 2 // 5x5 kernel (25 neighbors) for superior grain removal
         val twoSigmaSpatialSq = 2.0f * sigmaSpatial * sigmaSpatial
         val twoSigmaRangeSq = 2.0f * sigmaRange * sigmaRange
 

@@ -20,6 +20,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LiveData
 import com.motovision.pro.model.CameraCapabilities
 import com.motovision.pro.model.CameraModule
 import com.motovision.pro.model.CaptureMode
@@ -476,12 +477,10 @@ class CameraEngine(
                 )
             }
 
-            // Noise reduction tuning based on profile
+            // Noise reduction tuning: enable HIGH_QUALITY on MediaTek ISP for grain-free captures
             val noiseMode = when (currentProfile) {
                 ProcessingProfile.NATURAL -> CaptureRequest.NOISE_REDUCTION_MODE_FAST
-                ProcessingProfile.BALANCED, ProcessingProfile.DETAILED -> CaptureRequest.NOISE_REDUCTION_MODE_FAST
-                ProcessingProfile.VIBRANT -> CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
-                ProcessingProfile.MONOCHROME -> CaptureRequest.NOISE_REDUCTION_MODE_FAST
+                else -> CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
             }
             optionsBuilder.setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, noiseMode)
 
@@ -548,6 +547,21 @@ class CameraEngine(
 
     fun setZoom(linearZoom: Float) {
         camera?.cameraControl?.setLinearZoom(linearZoom.coerceIn(0.0f, 1.0f))
+    }
+
+    fun setZoomRatio(ratio: Float) {
+        val cam = camera ?: return
+        val minRatio = cam.cameraInfo.zoomState.value?.minZoomRatio ?: 1.0f
+        val maxRatio = cam.cameraInfo.zoomState.value?.maxZoomRatio ?: 8.0f
+        cam.cameraControl.setZoomRatio(ratio.coerceIn(minRatio, maxRatio))
+    }
+
+    fun getZoomRatio(): Float {
+        return camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: 1.0f
+    }
+
+    fun getZoomState(): LiveData<ZoomState>? {
+        return camera?.cameraInfo?.zoomState
     }
 
     fun shutdown() {

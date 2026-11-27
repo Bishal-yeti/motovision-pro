@@ -63,5 +63,45 @@ enum class ProcessingProfile(
         saturationScale = 0.00f,
         highlightRolloff = 0.75f,
         isMonochrome = true
+    ),
+    BW_VINTAGE(
+        title = "B&W Vintage",
+        description = "Warm sepia-toned classic silver-gelatin monochrome with soft archival shadows and vintage print atmosphere.",
+        sharpnessWeight = 0.40f,
+        noiseReductionStrength = 0.30f,
+        contrastBoost = 1.18f,
+        saturationScale = 0.00f,
+        highlightRolloff = 0.70f,
+        isMonochrome = true
+    ),
+    WARM_FILM(
+        title = "Warm Film",
+        description = "Golden-hour Kodachrome film simulation with warm amber highlights, muted cyan, and cinematic nostalgia.",
+        sharpnessWeight = 0.35f,
+        noiseReductionStrength = 0.35f,
+        contrastBoost = 1.12f,
+        saturationScale = 1.10f,
+        highlightRolloff = 0.70f,
+        isMonochrome = false
+    ),
+    COOL_CINEMA(
+        title = "Cool Cinema",
+        description = "Hollywood Teal & Orange palette with deep cool shadows, warm skin tones, and punchy cinematic contrast.",
+        sharpnessWeight = 0.45f,
+        noiseReductionStrength = 0.35f,
+        contrastBoost = 1.18f,
+        saturationScale = 1.12f,
+        highlightRolloff = 0.65f,
+        isMonochrome = false
+    ),
+    PORTRAIT_SOFT(
+        title = "Soft Glow",
+        description = "Flattering portrait aesthetic with gentle skin texture softening, delicate pastel tones, and smooth highlight glow.",
+        sharpnessWeight = 0.20f,
+        noiseReductionStrength = 0.45f,
+        contrastBoost = 1.04f,
+        saturationScale = 1.05f,
+        highlightRolloff = 0.80f,
+        isMonochrome = false
     );
 }
