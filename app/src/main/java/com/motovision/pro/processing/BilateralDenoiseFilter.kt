@@ -24,9 +24,10 @@ object BilateralDenoiseFilter {
         height: Int,
         sigmaSpatial: Float,
         sigmaRange: Float,
-        output: IntArray = IntArray(pixels.size)
+        output: IntArray = IntArray(pixels.size),
+        radius: Int = 2, // 5x5 kernel (25 neighbors) for superior grain removal; 1 = 3x3 for thermal-reduced mode
+        maxThreads: Int = Runtime.getRuntime().availableProcessors()
     ): IntArray {
-        val radius = 2 // 5x5 kernel (25 neighbors) for superior grain removal
         val twoSigmaSpatialSq = 2.0f * sigmaSpatial * sigmaSpatial
         val twoSigmaRangeSq = 2.0f * sigmaRange * sigmaRange
 
@@ -48,7 +49,7 @@ object BilateralDenoiseFilter {
         }
 
         // Process rows in parallel across available CPU threads
-        val threadCount = Runtime.getRuntime().availableProcessors().coerceAtLeast(2)
+        val threadCount = maxThreads.coerceAtLeast(1)
         val rowsPerChunk = Math.ceil(height.toDouble() / threadCount).toInt()
 
         val threads = Array(threadCount) { threadIdx ->

@@ -28,7 +28,9 @@ data class CameraCapabilities(
     val supportedRawResolutions: List<ImageResolution>,
     val physicalPixelArraySize: ImageResolution?,
     val focalLengths: FloatArray,
-    val availableAfModes: IntArray
+    val availableAfModes: IntArray,
+    /** ISP modes the HAL advertises; drives hardware tuning so unsupported modes are never requested. */
+    val ispAdvertised: com.motovision.pro.camera.IspTuningPlanner.Advertised = com.motovision.pro.camera.IspTuningPlanner.Advertised()
 ) {
     val isFixedFocus: Boolean
         get() = minFocusDistanceDiopters == 0.0f

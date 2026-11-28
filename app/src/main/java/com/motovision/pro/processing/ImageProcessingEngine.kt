@@ -105,10 +105,14 @@ object ImageProcessingEngine {
                     FrontSelfieEngine.processSelfie(bufSrc, width, height, profile, portraitBlurRadius = 8)
                 } else {
                     // 1. Bilateral Denoising (Edge-Preserving Noise Reduction)
-                    if (profile.noiseReductionStrength > 0.05f) {
+                    // Scale work to current thermal/memory state (Helio G85 throttles hard when hot):
+                    // FULL = 5x5 on all cores, REDUCED = 3x3, MINIMAL = skip (ISP NR still applies).
+                    val tier = com.motovision.pro.system.DeviceHealthMonitor.refresh()
+                    if (profile.noiseReductionStrength > 0.05f && tier != com.motovision.pro.system.DeviceHealthMonitor.QualityTier.MINIMAL) {
                         val spatial = 1.0f + profile.noiseReductionStrength * 2.0f
                         val range = 0.04f + profile.noiseReductionStrength * 0.06f
-                        BilateralDenoiseFilter.filter(bufSrc, width, height, spatial, range, bufDst)
+                        val radius = if (tier == com.motovision.pro.system.DeviceHealthMonitor.QualityTier.FULL) 2 else 1
+                        BilateralDenoiseFilter.filter(bufSrc, width, height, spatial, range, bufDst, radius)
                         // Swap buffers
                         val tmp = bufSrc
                         bufSrc = bufDst

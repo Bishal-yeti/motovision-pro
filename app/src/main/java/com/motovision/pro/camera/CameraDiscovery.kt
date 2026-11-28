@@ -185,7 +185,18 @@ class CameraDiscovery(private val cameraManager: CameraManager) {
             supportedRawResolutions = rawSizes,
             physicalPixelArraySize = pixelArraySize?.let { ImageResolution.fromSize(it) },
             focalLengths = focalLengths,
-            availableAfModes = afModes
+            availableAfModes = afModes,
+            ispAdvertised = IspTuningPlanner.Advertised(
+                noiseReduction = chars.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES) ?: intArrayOf(),
+                edge = chars.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES) ?: intArrayOf(),
+                hotPixel = chars.get(CameraCharacteristics.HOT_PIXEL_AVAILABLE_HOT_PIXEL_MODES) ?: intArrayOf(),
+                colorAberration = chars.get(CameraCharacteristics.COLOR_CORRECTION_AVAILABLE_ABERRATION_MODES) ?: intArrayOf(),
+                tonemap = chars.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES) ?: intArrayOf(),
+                shading = chars.get(CameraCharacteristics.SHADING_AVAILABLE_MODES) ?: intArrayOf(),
+                ois = oisModes,
+                aeFpsRanges = (chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: emptyArray())
+                    .flatMap { listOf(it.lower, it.upper) }.toIntArray()
+            )
         )
     }
 

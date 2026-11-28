@@ -49,8 +49,20 @@ class CameraEngine(
         private set
     private var imageAnalysis: ImageAnalysis? = null
 
-    val cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
-    val analysisExecutor: ExecutorService = Executors.newFixedThreadPool(2)
+    // Camera callbacks run at display priority so frame delivery isn't starved by background work
+    val cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor { r ->
+        Thread {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY)
+            r.run()
+        }.apply { name = "MV-Camera" }
+    }
+    // Analysis (histogram/peaking) is background work: keep it off the big cores' critical path
+    val analysisExecutor: ExecutorService = Executors.newFixedThreadPool(1) { r ->
+        Thread {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            r.run()
+        }.apply { name = "MV-Analysis" }
+    }
 
     val videoEngine: VideoRecordingEngine = VideoRecordingEngine(context, cameraExecutor)
 
@@ -315,14 +327,17 @@ class CameraEngine(
     @SuppressLint("UnsafeOptInUsageError")
     private fun <T> configureCamera2CaptureSession(extender: Camera2Interop.Extender<T>) {
         try {
-            extender.setCaptureRequestOption(
-                CaptureRequest.NOISE_REDUCTION_MODE,
-                CaptureRequest.NOISE_REDUCTION_MODE_FAST
-            )
-            extender.setCaptureRequestOption(
-                CaptureRequest.EDGE_MODE,
-                CaptureRequest.EDGE_MODE_FAST
-            )
+            // Hardware ISP pipeline modes chosen only from what this HAL advertises
+            ispPlan()?.let { plan ->
+                plan.noiseReduction?.let { extender.setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, it) }
+                plan.edge?.let { extender.setCaptureRequestOption(CaptureRequest.EDGE_MODE, it) }
+                plan.hotPixel?.let { extender.setCaptureRequestOption(CaptureRequest.HOT_PIXEL_MODE, it) }
+                plan.colorAberration?.let { extender.setCaptureRequestOption(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, it) }
+                plan.tonemap?.let { extender.setCaptureRequestOption(CaptureRequest.TONEMAP_MODE, it) }
+                plan.shading?.let { extender.setCaptureRequestOption(CaptureRequest.SHADING_MODE, it) }
+                plan.opticalStabilization?.let { extender.setCaptureRequestOption(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, it) }
+                plan.aeFpsRange?.let { extender.setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(it[0], it[1])) }
+            }
 
             // Video stabilization if supported
             val caps = discovery.getCapabilities(currentModule)
@@ -477,15 +492,17 @@ class CameraEngine(
                 )
             }
 
-            // Noise reduction tuning: enable HIGH_QUALITY on MediaTek ISP for grain-free captures
-            val noiseMode = when (currentProfile) {
-                ProcessingProfile.NATURAL -> CaptureRequest.NOISE_REDUCTION_MODE_FAST
-                else -> CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
+            // Hardware ISP tuning, derived from HAL-advertised modes and current thermal tier.
+            ispPlan()?.let { plan ->
+                plan.noiseReduction?.let { optionsBuilder.setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, it) }
+                plan.edge?.let { optionsBuilder.setCaptureRequestOption(CaptureRequest.EDGE_MODE, it) }
+                plan.hotPixel?.let { optionsBuilder.setCaptureRequestOption(CaptureRequest.HOT_PIXEL_MODE, it) }
+                plan.colorAberration?.let { optionsBuilder.setCaptureRequestOption(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, it) }
+                plan.tonemap?.let { optionsBuilder.setCaptureRequestOption(CaptureRequest.TONEMAP_MODE, it) }
+                plan.shading?.let { optionsBuilder.setCaptureRequestOption(CaptureRequest.SHADING_MODE, it) }
+                plan.opticalStabilization?.let { optionsBuilder.setCaptureRequestOption(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, it) }
+                plan.aeFpsRange?.let { optionsBuilder.setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(it[0], it[1])) }
             }
-            optionsBuilder.setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, noiseMode)
-
-            // Edge enhancement tuning: EDGE_MODE_FAST is guaranteed supported across all Android Camera2 levels
-            optionsBuilder.setCaptureRequestOption(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
 
             camera2Control.setCaptureRequestOptions(optionsBuilder.build())
         } catch (e: Exception) {
@@ -547,6 +564,17 @@ class CameraEngine(
 
     fun setZoom(linearZoom: Float) {
         camera?.cameraControl?.setLinearZoom(linearZoom.coerceIn(0.0f, 1.0f))
+    }
+
+    private fun ispPlan(): IspTuningPlanner.IspModes? {
+        val caps = discovery.getCapabilities(currentModule) ?: return null
+        val tier = com.motovision.pro.system.DeviceHealthMonitor.tier
+        return IspTuningPlanner.plan(
+            adv = caps.ispAdvertised,
+            stillQuality = currentProfile != ProcessingProfile.NATURAL,
+            thermalReduced = tier != com.motovision.pro.system.DeviceHealthMonitor.QualityTier.FULL,
+            isVideo = currentMode.isVideo
+        )
     }
 
     fun setZoomRatio(ratio: Float) {

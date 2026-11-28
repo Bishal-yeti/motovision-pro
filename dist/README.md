@@ -2,7 +2,7 @@
 ## Advanced Computational Photography Camera Engine for Motorola Moto G23
 
 [![Android Build](https://img.shields.io/badge/Build-Passing-brightgreen)]()
-[![Test Suite](https://img.shields.io/badge/Unit_Tests-33%2F33_Passing_(100%25)-brightgreen)]()
+[![Test Suite](https://img.shields.io/badge/Unit_Tests-39%2F39_Passing_(100%25)-brightgreen)]()
 [![Platform](https://img.shields.io/badge/Target-Motorola_Moto_G23-orange)]()
 [![SoC](https://img.shields.io/badge/Processor-MediaTek_Helio_G85-blue)]()
 
@@ -62,10 +62,10 @@ Both release and debug APKs are compiled, verified, and hosted directly in this 
 
 - 🚀 [**Download MotoVisionPro-Release.apk (5.5 MB)**](https://github.com/Bishal-yeti/motovision-pro/raw/main/dist/MotoVisionPro-Release.apk)
   - **Recommended for sideloading on your Moto G23.** Optimized DEX, signed release package.
-  - SHA-256: `6a3fa89c02dbb73f451f7f4e13be5e88a89917d8ecf2485c114b040bf48f7818`
+  - SHA-256: `bd9be2a91f3b233aae0628c52756fc722a85c5d67e474d2b1adc7124a3b2024d`
 - 🛠️ [**Download MotoVisionPro-Debug.apk (7.7 MB)**](https://github.com/Bishal-yeti/motovision-pro/raw/main/dist/MotoVisionPro-Debug.apk)
   - Diagnostic build with debug symbols and verbose logcat instrumentation.
-  - SHA-256: `0ed4e5724a50a25267d2536dff27025a778d5eaaa8bee2fe32d1f770e5ea5f61`
+  - SHA-256: `baf2e368eba838adc15d4b4fb97b70c7dd9ab60a5eade289cea4de941ff1aba8`
 
 ### Building from Source
 Requirements: Android SDK Platform 34/35, OpenJDK 17 or 21, Gradle 8.8.
@@ -74,7 +74,7 @@ Requirements: Android SDK Platform 34/35, OpenJDK 17 or 21, Gradle 8.8.
 # Clone and navigate to project root
 cd /home/antigravity/MotoVisionPro
 
-# Execute full automated test suite (33 tests)
+# Execute full automated test suite (39 tests)
 ./gradlew test
 
 # Build Debug APK
